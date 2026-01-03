@@ -1,3 +1,4 @@
+
 -- This Script is Part of the Prometheus Obfuscator by Levno_710
 --
 -- unparser.lua
@@ -15,6 +16,7 @@ local config = require("config");
 local Ast    = require("prometheus.ast");
 local Enums  = require("prometheus.enums");
 local util = require("prometheus.util");
+local logger = require("logger");
 
 local lookupify = util.lookupify;
 local LuaVersion = Enums.LuaVersion;
@@ -58,7 +60,10 @@ function Unparser:isValidIdentifier(source)
 	if(string.find(source, self.numberPattern)) then
 		return false;
 	end
-	return true;
+	if self.keywordsLookup[source] then
+		return false;
+	end
+	return #source > 0;
 end
 
 function Unparser:setPrettyPrint(prettyPrint)
@@ -101,7 +106,7 @@ end
 
 function Unparser:unparse(ast)
 	if(ast.kind ~= AstKind.TopNode) then
-		error("Unparser:unparse expects a TopNode as first argument")
+		logger:error("Unparser:unparse expects a TopNode as first argument")
 	end
 	
 	return self:unparseBlock(ast.body);
@@ -117,12 +122,19 @@ function Unparser:unparseBlock(block, tabbing)
 	for i, statement in ipairs(block.statements) do
 		if(statement.kind ~= AstKind.NopStatement) then
 			local statementCode = self:unparseStatement(statement, tabbing);
-			if(#code > 0 and string.sub(statementCode, 1, 1) == "(") then
+			if(not self.prettyPrint and #code > 0 and string.sub(statementCode, 1, 1) == "(") then
 				-- This is so that the following works:
 				-- print("Test");(function() print("Test2") end)();
 				statementCode = ";" .. statementCode;
 			end
-			code = code .. self:whitespaceIfNeeded2(code, self:whitespaceIfNeeded(statementCode, self:newline(true))) .. statementCode;
+			local ws = self:whitespaceIfNeeded2(code, self:whitespaceIfNeeded(statementCode, self:newline(true)));
+			if i ~= 1 then
+				code = code .. ws;
+			end
+			if(self.prettyPrint) then
+				statementCode = statementCode .. ";"
+			end
+			code = code .. statementCode;
 		end
 	end
 	
@@ -145,7 +157,7 @@ function Unparser:unparseStatement(statement, tabbing)
 	elseif(statement.kind == AstKind.DoStatement) then
 		local bodyCode = self:unparseBlock(statement.body, tabbing);
 		code = "do" ..  self:whitespaceIfNeeded(bodyCode, self:newline(true))
-			.. bodyCode 
+			.. bodyCode .. self:newline(false)
 			.. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 	-- While Statement
@@ -157,7 +169,7 @@ function Unparser:unparseStatement(statement, tabbing)
 		
 		code = "while" .. self:whitespaceIfNeeded(expressionCode) .. expressionCode .. self:whitespaceIfNeeded2(expressionCode) 
 			.. "do" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
-			.. bodyCode
+			.. bodyCode .. self:newline(false)
 			.. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 			
 	-- Repeat Until Statement
@@ -169,7 +181,7 @@ function Unparser:unparseStatement(statement, tabbing)
 
 		code = "repeat" ..  self:whitespaceIfNeeded(bodyCode, self:newline(true))
 			.. bodyCode
-			.. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "until" .. self:whitespaceIfNeeded(expressionCode) .. expressionCode;
+			.. self:whitespaceIfNeeded2(bodyCode, self:newline() .. self:tabs(tabbing, true)) .. "until" .. self:whitespaceIfNeeded(expressionCode) .. expressionCode;
 
 	-- For Statement
 	elseif(statement.kind == AstKind.ForStatement) then
@@ -181,7 +193,7 @@ function Unparser:unparseStatement(statement, tabbing)
 		
 		local incrementByCode = statement.incrementBy and self:unparseExpression(statement.incrementBy, tabbing) or "1";
 		code = code .. self:optionalWhitespace() .. incrementByCode .. self:whitespaceIfNeeded2(incrementByCode)  .. "do" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
-			.. bodyCode
+			.. bodyCode .. self:newline(false)
 			.. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 		
@@ -208,7 +220,7 @@ function Unparser:unparseStatement(statement, tabbing)
 		
 		local bodyCode = self:unparseBlock(statement.body, tabbing);
 		code = code .. self:whitespaceIfNeeded2(code) .. "do" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
-			.. bodyCode
+			.. bodyCode .. self:newline(false)
 			.. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 		
@@ -223,18 +235,18 @@ function Unparser:unparseStatement(statement, tabbing)
 		for i, eif in ipairs(statement.elseifs) do
 			exprcode = self:unparseExpression(eif.condition, tabbing);
 			bodyCode = self:unparseBlock(eif.body, tabbing);
-			code = code .. self:whitespaceIfNeeded2(code, self:tabs(tabbing, true)) .. "elseif" .. self:whitespaceIfNeeded(exprcode) .. exprcode .. self:whitespaceIfNeeded2(exprcode) 
+			code = code .. self:newline(false) .. self:whitespaceIfNeeded2(code, self:tabs(tabbing, true)) .. "elseif" .. self:whitespaceIfNeeded(exprcode) .. exprcode .. self:whitespaceIfNeeded2(exprcode) 
 				.. "then" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
 				.. bodyCode;
 		end
 		
 		if(statement.elsebody) then
 			bodyCode = self:unparseBlock(statement.elsebody, tabbing);
-			code = code .. self:whitespaceIfNeeded2(code, self:tabs(tabbing, true)) .. "else" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
+			code = code .. self:newline(false) .. self:whitespaceIfNeeded2(code, self:tabs(tabbing, true)) .. "else" .. self:whitespaceIfNeeded(bodyCode, self:newline(true))
 				.. bodyCode;
 		end
 		
-		code = code .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
+		code = code .. self:newline(false) .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 		
 	-- Function Declaration
@@ -259,7 +271,7 @@ function Unparser:unparseStatement(statement, tabbing)
 		code = code .. ")";
 		
 		local bodyCode = self:unparseBlock(statement.body, tabbing);
-		code = code .. self:newline(false) .. self:tabs(tabbing) .. bodyCode .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
+		code = code .. self:newline(false) .. bodyCode .. self:newline(false) .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 		
 	-- Local Function Declaration
@@ -280,7 +292,7 @@ function Unparser:unparseStatement(statement, tabbing)
 		code = code .. ")";
 
 		local bodyCode = self:unparseBlock(statement.body, tabbing);
-		code = code .. self:newline(false) .. self:tabs(tabbing) .. bodyCode .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
+		code = code .. self:newline(false) .. bodyCode .. self:newline(false) .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		
 	-- Local Variable Declaration
 	elseif(statement.kind == AstKind.LocalVariableDeclaration) then
@@ -292,16 +304,14 @@ function Unparser:unparseStatement(statement, tabbing)
 			end
 			code = code .. statement.scope:getVariableName(id);
 		end
-		
-		code = code .. self:optionalWhitespace();
-		
+
 		if(#statement.expressions > 0) then
-			code = code.. "=" .. self:optionalWhitespace();
+			code = code .. self:optionalWhitespace() .. "=" .. self:optionalWhitespace();
 			for i, expr in ipairs(statement.expressions) do
 				if i > 1 then
 					code = code .. "," .. self:optionalWhitespace();
 				end
-				code = code .. self:unparseExpression(expr, tabbing);
+				code = code .. self:unparseExpression(expr, tabbing + 1);
 			end
 		end
 	-- Function Call Statement
@@ -359,7 +369,7 @@ function Unparser:unparseStatement(statement, tabbing)
 			if i > 1 then
 				code = code .. "," .. self:optionalWhitespace();
 			end
-			code = code .. self:unparseExpression(expr, tabbing);
+			code = code .. self:unparseExpression(expr, tabbing + 1);
 		end
 		
 	-- Return Statement
@@ -373,9 +383,26 @@ function Unparser:unparseStatement(statement, tabbing)
 				code = code .. "," .. self:optionalWhitespace() .. exprcode;
 			end
 		end
-	-- While Statement
+	elseif self.luaVersion == LuaVersion.LuaU then
+		if statement.kind == AstKind.CompoundAddStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "+=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundSubStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "-=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundMulStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "*=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundDivStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "/=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundModStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "%=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundPowStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "^=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		elseif statement.kind == AstKind.CompoundConcatStatement then
+			code = code .. self:unparseExpression(statement.lhs, tabbing) .. self:optionalWhitespace() .. "..=" .. self:optionalWhitespace() .. self:unparseExpression(statement.rhs, tabbing);
+		else
+			logger:error(string.format("\"%s\" is not a valid unparseable statement in %s!", statement.kind, self.luaVersion));
+		end
 	else
-		error(string.format("\"%s\" is not a valid unparseable statement", statement.kind));
+		logger:error(string.format("\"%s\" is not a valid unparseable statement in %s!", statement.kind, self.luaVersion));
 	end
 	
 	return self:tabs(tabbing, false) .. code;
@@ -423,7 +450,11 @@ function Unparser:unparseExpression(expression, tabbing)
 	end
 	
 	if(expression.kind == AstKind.NumberExpression) then
-		return tostring(expression.value);
+		local str = tostring(expression.value);
+		if(str:sub(1, 2) == "0.") then
+			str = str:sub(2);
+		end
+		return str;
 	end
 	
 	if(expression.kind == AstKind.VariableExpression or expression.kind == AstKind.AssignmentVariable) then
@@ -711,9 +742,7 @@ function Unparser:unparseExpression(expression, tabbing)
 		
 		-- Identifier Indexing e.g: x.y instead of x["y"];
 		if(expression.index.kind == AstKind.StringExpression and self:isValidIdentifier(expression.index.value)) then
-			if(not self.keywordsLookup[expression.index.value]) then
-				return base .. "." .. expression.index.value;
-			end
+			return base .. "." .. expression.index.value;
 		end
 		
 		-- Index never needs parens
@@ -768,7 +797,7 @@ function Unparser:unparseExpression(expression, tabbing)
 	
 	k = AstKind.FunctionLiteralExpression;
 	if(expression.kind == k) then
-		code = "function" .. self:optionalWhitespace() .. "(";
+		code = "function" .. "(";
 
 		for i, arg in ipairs(expression.args) do
 			if i > 1 then
@@ -783,24 +812,35 @@ function Unparser:unparseExpression(expression, tabbing)
 		code = code .. ")";
 
 		local bodyCode = self:unparseBlock(expression.body, tabbing);
-		code = code .. self:newline(false) .. self:tabs(tabbing) .. bodyCode .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
+		code = code .. self:newline(false) .. bodyCode .. self:newline(false) .. self:whitespaceIfNeeded2(bodyCode, self:tabs(tabbing, true)) .. "end";
 		return code;
 	end
 	
 	k = AstKind.TableConstructorExpression;
 	if(expression.kind == k) then
+		if(#expression.entries == 0) then return "{}" end;
+
+		local inlineTable = #expression.entries <= 3;
 		local tableTabbing = tabbing + 1;
 		
-		code = "{" .. self:optionalWhitespace(self:newline() .. self:tabs(tableTabbing));
+		code = "{";
+		if inlineTable then
+			code = code .. self:optionalWhitespace();
+		else
+			code = code .. self:optionalWhitespace(self:newline() .. self:tabs(tableTabbing));
+		end
 		
 		local p = false;
 		for i, entry in ipairs(expression.entries) do
 			p = true;
-			if i > 1 then
-				code = code .. "," .. self:optionalWhitespace(self:newline() .. self:tabs(tableTabbing));
+			local sep = self.prettyPrint and "," or (math.random(1, 2) == 1 and "," or ";");
+			if i > 1 and not inlineTable then
+				code = code .. sep .. self:optionalWhitespace(self:newline() .. self:tabs(tableTabbing));
+			elseif i > 1 then
+				code = code .. sep .. self:optionalWhitespace();
 			end
 			if(entry.kind == AstKind.KeyedTableEntry) then
-				if(entry.key.kind == AstKind.StringExpression and self:isValidIdentifier(entry.key.kind)) then
+				if(entry.key.kind == AstKind.StringExpression and self:isValidIdentifier(entry.key.value)) then
 					code = code .. entry.key.value;
 				else
 					code = code .. "[" .. self:unparseExpression(entry.key, tableTabbing) .. "]";
@@ -810,11 +850,15 @@ function Unparser:unparseExpression(expression, tabbing)
 				code = code .. self:unparseExpression(entry.value, tableTabbing);
 			end
 		end
+
+		if inlineTable then
+			return code .. self:optionalWhitespace() .. "}";
+		end
 		
 		return code .. self:optionalWhitespace((p and "," or "") .. self:newline() .. self:tabs(tabbing)) .. "}";
 	end
 
-	error(string.format("\"%s\" is not a valid unparseable expression", expression.kind));
+	logger:error(string.format("\"%s\" is not a valid unparseable expression", expression.kind));
 end
 
 return Unparser
