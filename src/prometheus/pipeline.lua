@@ -200,6 +200,9 @@ function Pipeline:apply(code, filename)
 	logger:info(string.format("Obfuscation Done in %.2f seconds", timeDiff));
 	
 	logger:info(string.format("Generated Code size is %.2f%% of the Source Code size", (string.len(code) / sourceLen)*100))
+	
+	code = "--[[\n    " .. config.Watermark .. "\n]]\n" .. code;
+	
 	return code;
 end
 
@@ -228,7 +231,7 @@ function Pipeline:renameVariables(ast)
 		generatorFunction = generatorFunction.generateName;
 	end
 	
-	if not self.unparser:isValidIdentifier(self.VarNamePrefix) then
+	if not self.unparser:isValidIdentifier(self.VarNamePrefix) and #self.VarNamePrefix ~= 0 then
 		logger:error(string.format("The Prefix \"%s\" is not a valid Identifier in %s", self.VarNamePrefix, self.LuaVersion));
 	end
 
@@ -247,3 +250,4 @@ end
 
 
 return Pipeline;
+
